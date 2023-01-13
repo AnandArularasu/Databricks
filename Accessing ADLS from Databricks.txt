@@ -1,0 +1,134 @@
+Good read...
+-----------
+https://greece760.gitbook.io/azure-databricks-learning/environment-configuration/secret-scopes
+
+Storage Account
+===============
+1. Create storage account
+
+2. Upgrade to Data Lake Gen 2
+Values for account properties are incompatible: containerDeleteRetentionPolicy.
+
+3. Create Application
+
+To Create App ==> Azure "=" Burger Icon (left top) ==> Azure Active Directory ==> "App Registration" (in Left menu) => "New Registration" => Provide Name  ==> DONE
+
+4. Create secret for the App
+
+Go to App => "Certificates & Secrets" in left menu => click "+ New Client Secret" => Give Desc & Expiry
+****IMPORTANT (To record in Key Vault for Databricks Scope)
+	a) Copy the "value" - This is the Secret key *** It will only show up one time ****
+	b) Copy the Application ID (or) Client ID of the App (From the App OVERVIEW)
+	c) Copy the Directory ID (or) Tenent ID of the App (From the App OVERVIEW)
+
+3. Create key vault (Ex Name : vsdbsakeyvault)
+Properties,,
+Copy Vault URI
+https://vsdbsakeyvault.vault.azure.net/
+Copy Resource ID
+/subscriptions/--------------/resourceGroups/res_grp_databricks/providers/Microsoft.KeyVault/vaults/vsdbsakeyvault
+Note: key vault's URI and ResourceID will be used to create Secret Scope in Databricks
+
+Add (a), (b) & (c) from prev Step 4 to the "key vault"
+Go to KEy Vault => "Secrets" =>  "+Generate/Import" => Add meaningful names (Ex: vsdbappclientid, vsdbapptenentid & vsdbappsecretvalue)  and the copied values from step 4
+
+To Create scope from Databricks....
+===============================
+Add #secrets/createScope to the databricks URL
+Ex: https://adb---------.azuredatabricks.net/----------#secrets/createScope
+
+Mention scope name, Key vault URI & Respurce ID
+IMPORTANT NOTE: Property: Manage Principal ==> "All Users" / Creator is only for Premium Account
+
+To Create secret scope from Bash...
+================================
+pip install databricks-cli
+databricks configure --token
+Provide URL...https://adb---------.azuredatabricks.net/----------#setting/clusters/1229-203112-27mw7yp8
+Provide token... << Token >> 
+NOTE: To get token ==> In Databricks Portal => "username"/Account (Top-Right menu) => User Settings => Access tokens = > Generate new token
+
+command line....
+databricks secrets create-scope --scope <scope name>
+
+
+To delete or list scopes from Bash...
+==================================
+
+databricks secrets list --scope <scope name>
+
+databricks secrets delete-scope --scope <scope name>
+
+To list secret scope from databricks workbook...
+---------------------------------------------
+
+dbutils.secrets.listScopes()
+Out: [SecretScope(name='vsdbsecretscope')]
+<<<< secret scope names will be listed >>>>
+
+dbutils.secrets.list(scope = "vsdbsecretscope")
+Out: []
+<<<< Keys in the linked Key Vault will be listed >>>>
+<<<< when no keys (secrets) are in the Vault Out: [] >>>>>
+
+Finally create container and add files..
+======================================
+Create container
+https://vsdbsa.blob.core.windows.net/vsdbstoragecontainer
+upload files
+
+Go to Key Vault => Secret => create a secret with "Keyname" and Storage account URI
+
+Now in Databricks workbook 
+dbutils.secrets.list(scope = "vsdbsecretscope")
+Out: [SecretMetadata(key='vsdbsakay')]
+<<<< will list the new key(secret) created above >>>>
+
+dbutils.secrets.get(scope = 'vsdbsecretscope', key='vsdbsakay')
+Out: '[REDACTED]'
+<<<< The meaning of REDACTED is edited especially in order to obscure or remove sensitive information >>>>
+
+Databricks Scope <--- links to ----> Key Vault <--- links to ----> Application <--- links to ----> Blob Storage
+
+common Mistakes
+1- '/' between '.net' and '#secrets' in the url
+2- Storage account was not Upgraded to "Data Lake Gen2"
+3- Secret Scope was created using Key URI, it has to be Key Vault's URL and resource ID
+4- while using Bash, missed pip install and configuring Token from databricks
+
+
+Finally, In Databricks workbook....
+
+1. Varibles that will be used in config...
+
+storage_account_name = "vsdbsa"
+container_name = "vsdbstoragecontainer"
+client_id = dbutils.secrets.get(scope='vsdbsecretscope',key='vsdbappclientid')
+tenent_id = dbutils.secrets.get(scope='vsdbsecretscope',key='vsdbapptenentid')
+client_secret = dbutils.secrets.get(scope='vsdbsecretscope',key='vsdbappsecretvalue')
+
+2. Config Variable...
+
+configs = {"fs.azure.account.auth.type": "OAuth",
+           "fs.azure.account.oauth.provider.type": "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",
+           "fs.azure.account.oauth2.client.id": f"{client_id}",
+           "fs.azure.account.oauth2.client.secret": f"{client_secret}",
+           "fs.azure.account.oauth2.client.endpoint": f"https://login.microsoftonline.com/{tenent_id}/oauth2/token"}
+
+
+3. Mount ADLS (Azure Data Lake Storage) using all the above variable...
+
+dbutils.fs.mount(
+    source = f"abfss://{container_name}@{storage_account_name}.dfs.core.windows.net/",
+    mount_point = f"/mnt/{storage_account_name}/{container_name}",
+    extra_configs = configs)
+
+4. List the files in the container..
+
+dbutils.fs.ls(f"/mnt/{storage_account_name}/{container_name}")
+
+5. Unmount ADLS...
+
+dbutils.fs.unmount(f"/mnt/{storage_account_name}/{container_name}")
+
+
